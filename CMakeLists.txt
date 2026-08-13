@@ -1,5 +1,68 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.23)
 project(hoji LANGUAGES CXX)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+# So clangd/editors resolve the same includes the build uses.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# ---------------------------------------------------------------------------
+# Third-party (vendored, header-only)
+#
+# SYSTEM so -Wall -Wextra stays quiet inside 27k lines of json.hpp, and so a
+# warning there can never fail our build.
+# ---------------------------------------------------------------------------
+add_library(hoji_third_party INTERFACE)
+target_include_directories(hoji_third_party SYSTEM
+  INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+# ---------------------------------------------------------------------------
+# Engine
+#
+#   cmake --build build            # default target (hoji)
+#
+# Everything except main.cpp lives in hoji_core, so test binaries can link the
+# engine without pulling in main().
+# ---------------------------------------------------------------------------
+# CONFIGURE_DEPENDS makes the build system re-glob when src/ changes, so a new
+# file is picked up by `cmake --build` without a manual reconfigure.
+file(GLOB_RECURSE HOJI_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+# Headers are globbed only so they show up in IDEs and in the header file set;
+# the compiler finds them via the src/ include root below.
+file(GLOB_RECURSE HOJI_HEADERS CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
+
+set(HOJI_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+set(HOJI_CORE_SOURCES ${HOJI_SOURCES})
+list(REMOVE_ITEM HOJI_CORE_SOURCES "${HOJI_MAIN}")
+
+add_library(hoji_core STATIC ${HOJI_CORE_SOURCES})
+
+# src/ is the single include root: headers refer to each other root-relatively,
+# e.g. src/model/config.h says #include "dtype.h" and #include "model/foo.h".
+# PUBLIC so anything linking hoji_core inherits the same include root.
+target_sources(hoji_core
+  PUBLIC
+    FILE_SET hoji_headers TYPE HEADERS
+    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    FILES ${HOJI_HEADERS})
+
+target_include_directories(hoji_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# PRIVATE: json.hpp is an implementation detail of the loader. If a public
+# header ever includes it, consumers fail to compile — which is the point.
+target_link_libraries(hoji_core PRIVATE hoji_third_party)
+
+target_compile_features(hoji_core PUBLIC cxx_std_23)
+target_compile_options(hoji_core PRIVATE -Wall -Wextra)
+
+add_executable(hoji ${HOJI_MAIN})
+target_link_libraries(hoji PRIVATE hoji_core)
+target_compile_options(hoji PRIVATE -Wall -Wextra)
 
 # ---------------------------------------------------------------------------
 # Reference tensors
