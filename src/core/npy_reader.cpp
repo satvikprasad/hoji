@@ -52,7 +52,8 @@ inline std::expected<Shape, std::string> decode_shape(std::string_view header)
 
         if (!shape.push_back(dim))
         {
-            return std::unexpected("npy rank exceeds " + std::to_string(MAX_RANK));
+            return std::unexpected("npy rank exceeds " +
+                                   std::to_string(MAX_RANK));
         }
     }
 
@@ -63,11 +64,13 @@ inline std::expected<void, std::string> check_layout(std::string_view header)
 {
     if (header.find("'descr': '<f4'") == std::string_view::npos)
     {
-        return std::unexpected("npy dtype is not little-endian float32 ('<f4')");
+        return std::unexpected(
+            "npy dtype is not little-endian float32 ('<f4')");
     }
     if (header.find("'fortran_order': False") == std::string_view::npos)
     {
-        return std::unexpected("npy is not C-ordered ('fortran_order' must be False)");
+        return std::unexpected(
+            "npy is not C-ordered ('fortran_order' must be False)");
     }
     return {};
 }
@@ -82,7 +85,8 @@ inline size_t elem_count(const Shape &shape)
     return n;
 }
 
-Npy::Npy(Npy &&other) noexcept : shape(other.shape), data(other.data), base(other.base), bytes(other.bytes)
+Npy::Npy(Npy &&other) noexcept
+    : shape(other.shape), data(other.data), base(other.base), bytes(other.bytes)
 {
     other.base  = nullptr;
     other.bytes = 0;
@@ -121,7 +125,8 @@ void Npy::unmap() noexcept
     }
 }
 
-std::expected<Npy, std::string> npy_read_shape(const std::filesystem::path &npy_path)
+std::expected<Npy, std::string>
+npy_read_shape(const std::filesystem::path &npy_path)
 {
     constexpr size_t MAGIC_LEN         = 6;
     constexpr size_t HEADER_LEN_OFFSET = 8;
@@ -142,10 +147,12 @@ std::expected<Npy, std::string> npy_read_shape(const std::filesystem::path &npy_
     if (!S_ISREG(sb.st_mode) || static_cast<size_t>(sb.st_size) < PREAMBLE_LEN)
     {
         ::close(fd);
-        return std::unexpected("not a regular npy file: " + std::string(npy_path));
+        return std::unexpected("not a regular npy file: " +
+                               std::string(npy_path));
     }
 
-    void *mapped = ::mmap(nullptr, static_cast<size_t>(sb.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
+    void *mapped = ::mmap(nullptr, static_cast<size_t>(sb.st_size), PROT_READ,
+                          MAP_PRIVATE, fd, 0);
     ::close(fd);
     if (mapped == MAP_FAILED)
     {
@@ -157,7 +164,8 @@ std::expected<Npy, std::string> npy_read_shape(const std::filesystem::path &npy_
     out.base  = static_cast<std::byte *>(mapped);
     out.bytes = static_cast<size_t>(sb.st_size);
 
-    const std::string_view magic(reinterpret_cast<const char *>(out.base), MAGIC_LEN);
+    const std::string_view magic(reinterpret_cast<const char *>(out.base),
+                                 MAGIC_LEN);
     if (magic != "\x93NUMPY")
     {
         return std::unexpected("not an npy file: " + std::string(npy_path));
@@ -168,10 +176,12 @@ std::expected<Npy, std::string> npy_read_shape(const std::filesystem::path &npy_
     const size_t data_offset = PREAMBLE_LEN + header_len;
     if (data_offset > out.bytes)
     {
-        return std::unexpected("npy header runs past the end of " + std::string(npy_path));
+        return std::unexpected("npy header runs past the end of " +
+                               std::string(npy_path));
     }
 
-    const std::string_view header(reinterpret_cast<const char *>(out.base + PREAMBLE_LEN), header_len);
+    const std::string_view header(
+        reinterpret_cast<const char *>(out.base + PREAMBLE_LEN), header_len);
 
     if (const auto layout = check_layout(header); !layout)
     {
@@ -187,15 +197,17 @@ std::expected<Npy, std::string> npy_read_shape(const std::filesystem::path &npy_
     const size_t count = elem_count(*shape);
     if (data_offset % alignof(float) != 0)
     {
-        return std::unexpected("npy data is misaligned in " + std::string(npy_path));
+        return std::unexpected("npy data is misaligned in " +
+                               std::string(npy_path));
     }
     if (data_offset + count * sizeof(float) > out.bytes)
     {
-        return std::unexpected("npy data is truncated in " + std::string(npy_path));
+        return std::unexpected("npy data is truncated in " +
+                               std::string(npy_path));
     }
 
     out.shape = *shape;
-    out.data  = {reinterpret_cast<const float *>(out.base + data_offset), count};
+    out.data = {reinterpret_cast<const float *>(out.base + data_offset), count};
     return out;
 }
 }; // namespace core

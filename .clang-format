@@ -26,9 +26,7 @@ AlignConsecutiveMacros:
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-# 120, not 80/100: at 100 the widest kSpecs row overflows and clang-format
-# gives up on the table, exploding it one field per line.
-ColumnLimit: 120
+ColumnLimit: 80
 
 # Nothing collapses onto one line -- control flow stays visible.
 AllowShortFunctionsOnASingleLine: None
@@ -54,6 +52,3 @@ BinPackParameters: true
 Cpp11BracedListStyle: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1
-
-# Include order is the author's business, not the formatter's.
-SortIncludes: Never
