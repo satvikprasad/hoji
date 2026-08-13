@@ -31,14 +31,14 @@ template <class T> bool holds(const json &v) {
 }
 
 template <class T>
-std::expected<T, ConfigError> req(const json &j, std::string_view key) {
+std::expected<T, std::string> req(const json &j, std::string_view key) {
   const auto it = j.find(key);
   if (it == j.end() || it->is_null())
     return std::unexpected(
-        ConfigError{"missing required key: " + std::string(key)});
+        "missing required key: " + std::string(key));
   if (!holds<T>(*it))
     return std::unexpected(
-        ConfigError{"wrong type for key: " + std::string(key)});
+        "wrong type for key: " + std::string(key));
   return it->get<T>();
 }
 
@@ -51,13 +51,13 @@ template <class T> T opt(const json &j, std::string_view key, T fallback) {
 
 } // namespace
 
-std::expected<Config, ConfigError> parse_config(std::string_view text) {
+std::expected<Config, std::string> parse_config(std::string_view text) {
   const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
 
   if (j.is_discarded())
-    return std::unexpected(ConfigError{"malformed JSON"});
+    return std::unexpected("malformed JSON");
   if (!j.is_object())
-    return std::unexpected(ConfigError{"config root is not an object"});
+    return std::unexpected("config root is not an object");
 
   Config c{};
 
@@ -68,19 +68,19 @@ std::expected<Config, ConfigError> parse_config(std::string_view text) {
     c.model_type = Type::Qwen2;
   else
     return std::unexpected(
-        ConfigError{"unsupported model_type: " + *model_type});
+        "unsupported model_type: " + *model_type);
 
   const auto architectures = j.find("architectures");
   if (architectures == j.end() || !architectures->is_array() ||
       architectures->empty() || !architectures->front().is_string())
-    return std::unexpected(ConfigError{"missing or malformed architectures"});
+    return std::unexpected("missing or malformed architectures");
 
   const auto architecture = architectures->front().get<std::string>();
   if (architecture == "Qwen2ForCausalLM")
     c.architecture = Architecture::Qwen2ForCausalLM;
   else
     return std::unexpected(
-        ConfigError{"unsupported architecture: " + architecture});
+        "unsupported architecture: " + architecture);
 
   const auto hidden_act = req<std::string>(j, "hidden_act");
   if (!hidden_act)
@@ -89,7 +89,7 @@ std::expected<Config, ConfigError> parse_config(std::string_view text) {
     c.hidden_act = Activation::SiLU;
   else
     return std::unexpected(
-        ConfigError{"unsupported hidden_act: " + *hidden_act});
+        "unsupported hidden_act: " + *hidden_act);
 
   struct U32Field {
     uint32_t *dst;
@@ -132,22 +132,22 @@ std::expected<Config, ConfigError> parse_config(std::string_view text) {
   c.use_sliding_window = opt<bool>(j, "use_sliding_window", false);
 
   if (c.num_kv_heads == 0 || c.num_attn_heads % c.num_kv_heads != 0)
-    return std::unexpected(ConfigError{
-        "num_attention_heads is not divisible by num_key_value_heads"});
+    return std::unexpected(
+        "num_attention_heads is not divisible by num_key_value_heads");
   if (c.num_attn_heads == 0 || c.hidden_sz % c.num_attn_heads != 0)
     return std::unexpected(
-        ConfigError{"hidden_size is not divisible by num_attention_heads"});
+        "hidden_size is not divisible by num_attention_heads");
 
   return c;
 }
 
-std::expected<Config, ConfigError>
+std::expected<Config, std::string>
 load_config(const fs::path &dir) {
   const auto p = dir / "config.json";
 
   std::ifstream f(p, std::ios::binary);
   if (!f) {
-    return std::unexpected(ConfigError{"cannot open " + p.string()});
+    return std::unexpected("cannot open " + p.string());
   }
 
   std::string bytes{std::istreambuf_iterator<char>(f), {}};

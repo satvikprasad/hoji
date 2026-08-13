@@ -1,4 +1,5 @@
 #include "args.h"
+#include "core/npy_reader.h"
 #include "model/config.h"
 
 #include <expected>
@@ -12,10 +13,12 @@ int main(int argc, char **argv) {
     // load model config.json
     const model::Config conf = model::load_config(args.model).value();
 
-  } catch (const std::bad_expected_access<model::ConfigError> &ex) {
-    std::cout << "ERROR (config): " << ex.error().why << std::endl;
-  } catch (const std::bad_expected_access<args::ArgsError> &ex) {
-    std::cout << "ERROR (arguments): " << ex.error().why << std::endl;
+    const auto attn_in = core::npy_read_shape("ref/L0_attn_in.npy").value();
+    std::cout << "L0_attn_in rank=" << attn_in.shape.size << " elems="
+              << attn_in.data.size() << " first=" << attn_in.data[0] << std::endl;
+  } catch (const std::bad_expected_access<std::string> &ex) {
+    std::cerr << "ERROR: " << ex.error() << std::endl;
+    return 1;
   }
 
   return 0;

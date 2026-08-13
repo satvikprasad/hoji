@@ -1,0 +1,59 @@
+# Reconstructed from Mike Acton's public talks and the Insomniac Games
+# programming standards. clang-format cannot express naming rules, so the
+# snake_case / no-Hungarian side of that style is not covered here.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Braces on their own line, as in every code sample in his DOD talks.
+BreakBeforeBraces: Allman
+
+# Data tables should look like tables. This is the setting that matters most
+# for a DOD codebase: arrays of structs are aligned into columns instead of
+# being exploded one field per line.
+AlignArrayOfStructures: Left
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+AlignConsecutiveMacros:
+  Enabled: true
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+# 120, not 80/100: at 100 the widest kSpecs row overflows and clang-format
+# gives up on the table, exploding it one field per line.
+ColumnLimit: 120
+
+# Nothing collapses onto one line -- control flow stays visible.
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+InsertBraces: true
+
+# `float *p`, matching the C heritage of this style.
+PointerAlignment: Right
+ReferenceAlignment: Right
+DerivePointerAlignment: false
+
+NamespaceIndentation: None
+IndentCaseLabels: false
+AccessModifierOffset: -4
+FixNamespaceComments: true
+SpaceAfterCStyleCast: false
+BreakBeforeBinaryOperators: None
+BinPackArguments: true
+BinPackParameters: true
+Cpp11BracedListStyle: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+
+# Include order is the author's business, not the formatter's.
+SortIncludes: Never

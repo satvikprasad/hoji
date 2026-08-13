@@ -60,17 +60,17 @@ static_assert(std::size(kRequired) + std::size(kOptional) ==
 static_assert(args_partitioned(),
               "kRequired and kOptional must cover Arg with no gaps or repeats");
 
-inline std::expected<void, ArgsError>
+inline std::expected<void, std::string>
 assert_defaults(const bool (&seen)[Arg::COUNT]) {
   for (const Arg required : kRequired) {
     if (!seen[required])
-      return std::unexpected(ArgsError{"missing required flag: --" +
-                                       std::string(spec_of(required).name)});
+      return std::unexpected("missing required flag: --" +
+                                       std::string(spec_of(required).name));
   }
   return {};
 }
 
-static std::expected<void, ArgsError> decode_arg(Args &a, const Spec &spec,
+static std::expected<void, std::string> decode_arg(Args &a, const Spec &spec,
                                                  const std::string_view arg) {
   switch (spec.kind) {
   case Kind::Str:
@@ -87,25 +87,25 @@ static std::expected<void, ArgsError> decode_arg(Args &a, const Spec &spec,
     const auto r = std::from_chars(arg.data(), end, value);
     if (r.ec == std::errc::result_out_of_range)
       return std::unexpected(
-          ArgsError{"--" + std::string(spec.name) +
-                    " does not fit in 32 bits: " + std::string(arg)});
+          "--" + std::string(spec.name) +
+                    " does not fit in 32 bits: " + std::string(arg));
     if (r.ec != std::errc{} || r.ptr != end)
-      return std::unexpected(ArgsError{"--" + std::string(spec.name) +
+      return std::unexpected("--" + std::string(spec.name) +
                                        " expects a number, got " +
-                                       std::string(arg)});
+                                       std::string(arg));
     a.*spec.target.u32 = value;
     return {};
   }
 
   case Kind::Flag:
     return std::unexpected(
-        ArgsError{"--" + std::string(spec.name) + " takes no value"});
+        "--" + std::string(spec.name) + " takes no value");
   }
 
   std::unreachable();
 }
 
-std::expected<Args, ArgsError> parse(size_t argc, char **argv) {
+std::expected<Args, std::string> parse(size_t argc, char **argv) {
   Args a{};
 
   constexpr Arg WAITING_ON_FLAG = Arg::COUNT;
@@ -118,13 +118,13 @@ std::expected<Args, ArgsError> parse(size_t argc, char **argv) {
 
     if (is_help_flag(arg)) {
       emit_help();
-      return std::unexpected(ArgsError{"help requested"});
+      return std::unexpected("help requested");
     }
 
     if (!arg.starts_with("-")) {
       if (curr == WAITING_ON_FLAG) {
-        return std::unexpected(ArgsError{"encountered arg " + std::string(arg) +
-                                         " when waiting on a flag."});
+        return std::unexpected("encountered arg " + std::string(arg) +
+                                         " when waiting on a flag.");
       }
 
       const Spec &spec = kSpecs[curr];
@@ -149,7 +149,7 @@ std::expected<Args, ArgsError> parse(size_t argc, char **argv) {
 
       if (seen[spec.arg_type] == true) {
         return std::unexpected(
-            ArgsError{"duplicate argument " + std::string(spec.name)});
+            "duplicate argument " + std::string(spec.name));
       }
 
       seen[spec.arg_type] = true;
@@ -165,12 +165,12 @@ std::expected<Args, ArgsError> parse(size_t argc, char **argv) {
 
     if (!matched)
       return std::unexpected(
-          ArgsError{"unrecognized flag " + std::string(arg)});
+          "unrecognized flag " + std::string(arg));
   }
 
   if (curr != WAITING_ON_FLAG) {
     return std::unexpected(
-        ArgsError{"trailing flag " + std::string(kSpecs[curr].name)});
+        "trailing flag " + std::string(kSpecs[curr].name));
   }
 
   // --help already returned above, so required flags always apply here.

@@ -87,8 +87,5 @@ static_assert(specs_match_enum(), "kSpecs order must match the Arg enum");
 
 constexpr const Spec &spec_of(Arg a) { return kSpecs[static_cast<size_t>(a)]; }
 
-struct ArgsError {
-  std::string why;
-};
-std::expected<Args, ArgsError> parse(size_t argc, char **argv);
+std::expected<Args, std::string> parse(size_t argc, char **argv);
 } // namespace args

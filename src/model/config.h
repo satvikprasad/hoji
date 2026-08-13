@@ -25,10 +25,7 @@ struct Config {
       num_hidden_layers, num_kv_heads, sliding_window, vocab_size;
 };
 
-struct ConfigError {
-  std::string why;
-};
 
-std::expected<Config, ConfigError>
+std::expected<Config, std::string>
 load_config(const std::filesystem::path &dir);
 } // namespace model
