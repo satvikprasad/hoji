@@ -25,3 +25,4 @@ tqdm==4.70.0
 transformers==5.15.0
 typer==0.27.1
 typing_extensions==4.16.0
+matplotlib==3.11.1

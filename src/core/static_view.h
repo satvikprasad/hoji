@@ -12,6 +12,16 @@ template <typename T, size_t R> struct StaticView
     T     *data{nullptr};
     size_t dims[R]{};
 
+    constexpr T &operator[](size_t idx)
+    {
+        return data[idx];
+    }
+
+    constexpr T &operator[](size_t idx) const
+    {
+        return data[idx];
+    }
+
     template <class... I> constexpr T &operator[](I... idx) const
     {
         static_assert(sizeof...(I) == R, "index count must equal rank");
