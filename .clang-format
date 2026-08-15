@@ -52,3 +52,4 @@ BinPackParameters: true
 Cpp11BracedListStyle: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1
+QualifierAlignment: Right

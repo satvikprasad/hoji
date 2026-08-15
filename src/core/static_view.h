@@ -26,7 +26,7 @@ template <typename T, size_t R> struct StaticView
     {
         static_assert(sizeof...(I) == R, "index count must equal rank");
 
-        const size_t ix[R]{static_cast<size_t>(idx)...};
+        size_t const ix[R]{static_cast<size_t>(idx)...};
 
         size_t   i           = 0;
         uint32_t curr_stride = 1;

@@ -85,39 +85,44 @@ endif()
 #
 # bench/ sits outside src/, so hoji_core's glob never picks these up.
 # ---------------------------------------------------------------------------
-# _CPU_MATMUL_FOLDING_FACTOR is a macro, so its value is fixed per translation
-# unit: one library can only expose one setting. Build one shared library per
-# value; bench/bench.py loads them all and sweeps.
+# The register tile dimensions are macros, so their values are fixed per
+# translation unit: one library exposes one tile. Build one shared library per
+# tile; bench/bench.py loads them all and sweeps.
 #
 # Each library compiles cpu.cc itself rather than linking hoji_core, so the -D
 # actually reaches the kernel body.
-set(HOJI_BENCH_FOLDS 1 4 8 12 16)
+set(HOJI_BENCH_TILES 1x1 1x4 2x2 4x4 4x8 8x4)
 
 set(HOJI_BACKEND_C "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/backend_c.cc")
 set(HOJI_CPU_KERNELS "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cpu.cc")
 
 # Highest optimization available, so a slow number means a slow kernel rather
 # than a flag we forgot. Deliberately NOT -Ofast/-ffast-math: those enable FP
-# reassociation, which would let the compiler fold the reduction itself and hide
-# exactly the effect these benches exist to measure.
+# reassociation, which lets the compiler restructure reductions itself and hides
+# exactly the effects these benches exist to measure.
 set(HOJI_BENCH_FLAGS
   -Wall -Wextra
   -O3 -mcpu=native -funroll-loops -ffp-contract=fast -fno-math-errno -flto
   -g -fno-omit-frame-pointer)
 
 set(HOJI_BENCH_TARGETS)
-foreach(fold IN LISTS HOJI_BENCH_FOLDS)
-  set(lib "hoji_backend_f${fold}")
+foreach(tile IN LISTS HOJI_BENCH_TILES)
+  string(REPLACE "x" ";" dims "${tile}")
+  list(GET dims 0 tm)
+  list(GET dims 1 tn)
+
+  set(lib "hoji_backend_t${tm}x${tn}")
   add_library(${lib} SHARED ${HOJI_BACKEND_C} ${HOJI_CPU_KERNELS})
   target_include_directories(${lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_compile_definitions(${lib} PRIVATE _CPU_MATMUL_FOLDING_FACTOR=${fold})
+  target_compile_definitions(${lib} PRIVATE
+    _CPU_MATMUL_TILE_M=${tm} _CPU_MATMUL_TILE_N=${tn})
   target_compile_features(${lib} PRIVATE cxx_std_23)
   target_compile_options(${lib} PRIVATE ${HOJI_BENCH_FLAGS})
   target_link_options(${lib} PRIVATE -flto)
   list(APPEND HOJI_BENCH_TARGETS ${lib})
 endforeach()
 
-# Sweep every folding factor from Python and write a plot.
+# Sweep every tile from Python and write a plot.
 add_custom_target(bench
   COMMAND "${HOJI_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/bench/bench.py"
           --build-dir "${CMAKE_CURRENT_BINARY_DIR}"

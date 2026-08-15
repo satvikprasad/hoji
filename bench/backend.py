@@ -1,7 +1,7 @@
 """ctypes bindings for the hoji backend kernels.
 
-The folding factor is a compile-time macro, so CMake emits one shared library
-per value. Each Backend instance wraps one of them.
+The register tile dimensions are compile-time macros, so CMake emits one shared
+library per tile. Each Backend instance wraps one of them.
 """
 import ctypes
 import glob
@@ -23,21 +23,23 @@ def _as_f32(arr):
 
 
 class Backend:
-    """One compiled backend, i.e. one folding factor."""
+    """One compiled backend, i.e. one register tile."""
 
     def __init__(self, path):
         self.path = path
         self._lib = ctypes.CDLL(path)
 
-        self._lib.hoji_backend_folding_factor.restype = ctypes.c_int
-        self._lib.hoji_backend_folding_factor.argtypes = []
+        for fn in ("hoji_backend_tile_m", "hoji_backend_tile_n"):
+            getattr(self._lib, fn).restype = ctypes.c_int
+            getattr(self._lib, fn).argtypes = []
 
         self._lib.hoji_matmul_f32.restype = None
         self._lib.hoji_matmul_f32.argtypes = [
             _F32, _F32, _F32,
             ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
         ]
-        self.folding_factor = self._lib.hoji_backend_folding_factor()
+        self.tile_m = self._lib.hoji_backend_tile_m()
+        self.tile_n = self._lib.hoji_backend_tile_n()
 
     def matmul(self, a, b_trans, out=None):
         """out(m, n) = a(m, k) @ b_trans(n, k).T"""
@@ -51,16 +53,21 @@ class Backend:
                                   m, k, n)
         return out
 
+    @property
+    def tile(self):
+        return f"{self.tile_m}x{self.tile_n}"
+
     def __repr__(self):
-        return f"Backend(f={self.folding_factor}, {os.path.basename(self.path)})"
+        return f"Backend({self.tile}, {os.path.basename(self.path)})"
 
 
 def load_all(build_dir="build"):
-    """Every backend library in build_dir, sorted by folding factor."""
-    libs = sorted(glob.glob(os.path.join(build_dir, "libhoji_backend_f*.dylib")))
+    """Every backend library in build_dir, sorted by tile area then rows."""
+    libs = sorted(glob.glob(os.path.join(build_dir, "libhoji_backend_t*.dylib")))
     if not libs:
-        libs = sorted(glob.glob(os.path.join(build_dir, "libhoji_backend_f*.so")))
+        libs = sorted(glob.glob(os.path.join(build_dir, "libhoji_backend_t*.so")))
     if not libs:
         sys.exit(f"no backend libraries in {build_dir!r}; "
                  f"run: cmake --build {build_dir}")
-    return sorted((Backend(p) for p in libs), key=lambda b: b.folding_factor)
+    return sorted((Backend(p) for p in libs),
+                  key=lambda b: (b.tile_m * b.tile_n, b.tile_m))

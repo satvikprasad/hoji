@@ -14,11 +14,16 @@
 
 extern "C"
 {
-    // Folding factor this library was compiled with. The value is a macro, so
-    // one library exposes exactly one setting; sweeps load several libraries.
-    int hoji_backend_folding_factor(void)
+    // Register tile dimensions this library was compiled with. They are macros,
+    // so one library exposes exactly one tile; sweeps load several libraries.
+    int hoji_backend_tile_m(void)
     {
-        return int(_CPU_MATMUL_FOLDING_FACTOR);
+        return int(_CPU_MATMUL_TILE_M);
+    }
+
+    int hoji_backend_tile_n(void)
+    {
+        return int(_CPU_MATMUL_TILE_N);
     }
 
     // out(m x n) = a(m x k) * b_trans(n x k)^T, row-major float32.
