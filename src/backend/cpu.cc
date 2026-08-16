@@ -9,7 +9,7 @@ namespace backend
 {
 namespace
 {
-inline float32x4_t load_partial(float32_t const *p, size_t const n)
+inline float32x4_t _load_partial(float32_t const *p, size_t const n)
 {
     float32x4_t v = vdupq_n_f32(0.f);
 
@@ -78,13 +78,13 @@ void _matmul_at_chunk(std::span<float32_t const> a,
 
         for (size_t i = 0; i < tile_m_size; ++i)
         {
-            a_col[i] = load_partial(a.data() + (i0 + i) * K + k_start, k_rem);
+            a_col[i] = _load_partial(a.data() + (i0 + i) * K + k_start, k_rem);
         }
 
         for (size_t j = 0; j < tile_n_size; ++j)
         {
             b_row[j] =
-                load_partial(b_trans.data() + (j0 + j) * K + k_start, k_rem);
+                _load_partial(b_trans.data() + (j0 + j) * K + k_start, k_rem);
         }
 
         for (size_t i = 0; i < tile_m_size; ++i)
@@ -108,11 +108,15 @@ void _matmul_at_chunk(std::span<float32_t const> a,
 }
 } // namespace
 
+namespace cpu
+{
 template <size_t R>
 void matmul(TensorF32<R> a /* M x K */, TensorF32<R> b_trans /* N x K */,
             MutTensorF32<R> out /* M * N */)
 {
     static_assert(R >= 2);
+
+    constexpr size_t C_N = _CPU_MATMUL_CACHE_BLOCK;
 
     constexpr size_t T_M = _CPU_MATMUL_TILE_M;
     constexpr size_t T_N = _CPU_MATMUL_TILE_N;
@@ -129,58 +133,70 @@ void matmul(TensorF32<R> a /* M x K */, TensorF32<R> b_trans /* N x K */,
         size_t const K = a.dims[R - 1];
         size_t const N = b_trans.dims[R - 2];
 
-        // batch offsets folded into the spans, so the tile kernel indexes from
-        // zero and never needs to know about batching
         std::span<float32_t const> const a_batch{a.data + batch * M * K, M * K};
         std::span<float32_t const> const b_batch{b_trans.data + batch * N * K,
                                                  N * K};
         std::span<float32_t> const out_batch{out.data + batch * M * N, M * N};
 
+        constexpr size_t C_N_ALIGNED = (C_N / T_N) * T_N;
+        size_t const     block_cols  = C_N_ALIGNED > 0 ? C_N_ALIGNED : N;
+
         size_t const m_chunks = M / T_M;
         size_t const m_rem    = M % T_M;
-        size_t const n_chunks = N / T_N;
-        size_t const n_rem    = N % T_N;
 
-        for (size_t tm = 0; tm < m_chunks; ++tm)
+        for (size_t j_base = 0; j_base < N; j_base += block_cols)
         {
-            for (size_t tn = 0; tn < n_chunks; ++tn)
-            {
-                _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K, N,
-                                           tm, tn, T_M, T_N);
-            }
-            if (n_rem > 0)
-            {
-                _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K, N,
-                                           tm, n_chunks, T_M, n_rem);
-            }
-        }
+            size_t const j_end =
+                (j_base + block_cols < N) ? j_base + block_cols : N;
 
-        if (m_rem == 1)
-        {
-            size_t const i0 = m_chunks * T_M;
+            // Register-tile indices covering this block. Only the final block
+            // can leave a partial tile, since block_cols is a multiple of T_N.
+            size_t const tn_begin = j_base / T_N;
+            size_t const tn_end   = j_end / T_N;
+            size_t const n_rem    = j_end % T_N;
 
-            for (size_t tn = 0; tn < n_chunks; ++tn)
+            for (size_t tm = 0; tm < m_chunks; ++tm)
             {
-                _matmul_at_chunk<1, T_N>(a_batch, b_batch, out_batch, K, N, i0,
-                                         tn, 1, T_N);
+                for (size_t tn = tn_begin; tn < tn_end; ++tn)
+                {
+                    _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K,
+                                               N, tm, tn, T_M, T_N);
+                }
+                if (n_rem > 0)
+                {
+                    _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K,
+                                               N, tm, tn_end, T_M, n_rem);
+                }
             }
-            if (n_rem > 0)
+
+            if (m_rem == 1)
             {
-                _matmul_at_chunk<1, T_N>(a_batch, b_batch, out_batch, K, N, i0,
-                                         n_chunks, 1, n_rem);
+                size_t const i0 = m_chunks * T_M;
+
+                for (size_t tn = tn_begin; tn < tn_end; ++tn)
+                {
+                    _matmul_at_chunk<1, T_N>(a_batch, b_batch, out_batch, K, N,
+                                             i0, tn, 1, T_N);
+                }
+                if (n_rem > 0)
+                {
+                    _matmul_at_chunk<1, T_N>(a_batch, b_batch, out_batch, K, N,
+                                             i0, tn_end, 1, n_rem);
+                }
             }
-        }
-        else if (m_rem > 1)
-        {
-            for (size_t tn = 0; tn < n_chunks; ++tn)
+            else if (m_rem > 1)
             {
-                _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K, N,
-                                           m_chunks, tn, m_rem, T_N);
-            }
-            if (n_rem > 0)
-            {
-                _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K, N,
-                                           m_chunks, n_chunks, m_rem, n_rem);
+                for (size_t tn = tn_begin; tn < tn_end; ++tn)
+                {
+                    _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K,
+                                               N, m_chunks, tn, m_rem, T_N);
+                }
+                if (n_rem > 0)
+                {
+                    _matmul_at_chunk<T_M, T_N>(a_batch, b_batch, out_batch, K,
+                                               N, m_chunks, tn_end, m_rem,
+                                               n_rem);
+                }
             }
         }
     }
@@ -190,4 +206,5 @@ void matmul(TensorF32<R> a /* M x K */, TensorF32<R> b_trans /* N x K */,
 // every rank a caller needs must be named.
 template void matmul<2>(TensorF32<2>, TensorF32<2>, MutTensorF32<2>);
 template void matmul<3>(TensorF32<3>, TensorF32<3>, MutTensorF32<3>);
+} // namespace cpu
 } // namespace backend

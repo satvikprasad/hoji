@@ -8,6 +8,15 @@ endif()
 # So clangd/editors resolve the same includes the build uses.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Both backends are always compiled and linked; this only selects which one the
+# unsuffixed C entry point hoji_matmul_f32 routes to. backend_c.cc also exposes
+# hoji_matmul_f32_cpu and hoji_matmul_f32_metal unconditionally, so one loaded
+# library can run both and compare them -- which is what bench/ does.
+#
+#   cmake -B build                       # hoji_matmul_f32 -> Metal (default)
+#   cmake -B build -D_BACKEND_CPU=ON     # hoji_matmul_f32 -> CPU
+option(_BACKEND_CPU "Route hoji_matmul_f32 to the CPU backend, not Metal" OFF)
+
 # ---------------------------------------------------------------------------
 # Third-party (vendored, header-only)
 #
@@ -37,8 +46,16 @@ file(GLOB_RECURSE HOJI_HEADERS CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
 
 set(HOJI_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cc")
+# Held out of hoji_core: it needs the Metal frameworks and the compiled-in
+# metallib path, and it must not be built at all when the Metal toolchain is
+# missing. The Metal section below turns it into hoji_metal.
+set(HOJI_METAL_HOST "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal.cc")
+
+# Both backends are always compiled: backend::cpu and backend::metal coexist, so
+# both type-check every build and one loaded library can run either. _BACKEND_CPU
+# only picks which one backend_c.cc's unsuffixed hoji_matmul_f32 routes to.
 set(HOJI_CORE_SOURCES ${HOJI_SOURCES})
-list(REMOVE_ITEM HOJI_CORE_SOURCES "${HOJI_MAIN}")
+list(REMOVE_ITEM HOJI_CORE_SOURCES "${HOJI_MAIN}" "${HOJI_METAL_HOST}")
 
 add_library(hoji_core STATIC ${HOJI_CORE_SOURCES})
 
@@ -60,6 +77,12 @@ target_link_libraries(hoji_core PRIVATE hoji_third_party)
 target_compile_features(hoji_core PUBLIC cxx_std_23)
 target_compile_options(hoji_core PRIVATE -Wall -Wextra)
 
+# PUBLIC: backend_c.cc switches on it, and so does anything else choosing between
+# backend::cpu::matmul and backend::metal::matmul.
+if(_BACKEND_CPU)
+  target_compile_definitions(hoji_core PUBLIC _BACKEND_CPU)
+endif()
+
 add_executable(hoji ${HOJI_MAIN})
 target_link_libraries(hoji PRIVATE hoji_core)
 target_compile_options(hoji PRIVATE -Wall -Wextra)
@@ -74,61 +97,100 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# Benchmarks
+# Metal shaders:  .metal -> .air -> .metallib
 #
-#   cmake --build build --target hoji_bench && ./build/hoji_bench
+# Needs the Metal toolchain, which ships separately from Xcode:
+#   xcodebuild -downloadComponent MetalToolchain
 #
-# A separate target so profiling flags stay off the engine: -g for symbols and
-# -fno-omit-frame-pointer so a sampling profiler can walk the stack, neither of
-# which a plain Release build gives you. -O3 is forced so the numbers mean
-# something even when the tree is configured as Debug.
-#
-# bench/ sits outside src/, so hoji_core's glob never picks these up.
+# The .metallib is a data file, so the loader has to find it at runtime. It is
+# written next to the binaries in the build tree and its path is compiled into
+# hoji_metal as HOJI_METALLIB_PATH.
 # ---------------------------------------------------------------------------
-# The register tile dimensions are macros, so their values are fixed per
-# translation unit: one library exposes one tile. Build one shared library per
-# tile; bench/bench.py loads them all and sweeps.
+find_program(HOJI_METAL_CC metal
+  HINTS /usr/bin /Library/Developer/CommandLineTools/usr/bin
+  PATHS ENV PATH)
+if(NOT HOJI_METAL_CC)
+  execute_process(COMMAND xcrun --find metal
+                  OUTPUT_VARIABLE HOJI_METAL_CC
+                  OUTPUT_STRIP_TRAILING_WHITESPACE
+                  ERROR_QUIET)
+endif()
+
+if(HOJI_METAL_CC)
+  file(GLOB_RECURSE HOJI_METAL_SOURCES CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/*.metal")
+
+  # -fno-fast-math: MSL enables fast math by default, which reassociates FP and
+  # would put the GPU results outside the tolerance the numpy checks use.
+  # -frecord-sources keeps source in the .air for the Metal debugger.
+  # -I src: kernels share headers with the C++ backends (backend/tensor_desc.h),
+  # using the same src-relative include root the rest of the tree uses.
+  set(HOJI_METAL_FLAGS -std=metal3.1 -O2 -fno-fast-math -frecord-sources
+      -I "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+  set(HOJI_AIR_FILES)
+  foreach(shader IN LISTS HOJI_METAL_SOURCES)
+    get_filename_component(stem "${shader}" NAME_WE)
+    set(air "${CMAKE_CURRENT_BINARY_DIR}/shaders/${stem}.air")
+    add_custom_command(
+      OUTPUT "${air}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+      COMMAND xcrun -sdk macosx metal ${HOJI_METAL_FLAGS} -c "${shader}" -o "${air}"
+      DEPENDS "${shader}"
+      COMMENT "metal -c ${stem}.metal"
+      VERBATIM)
+    list(APPEND HOJI_AIR_FILES "${air}")
+  endforeach()
+
+  if(HOJI_AIR_FILES)
+    set(HOJI_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/hoji.metallib")
+    add_custom_command(
+      OUTPUT "${HOJI_METALLIB}"
+      COMMAND xcrun -sdk macosx metallib ${HOJI_AIR_FILES} -o "${HOJI_METALLIB}"
+      DEPENDS ${HOJI_AIR_FILES}
+      COMMENT "metallib -> hoji.metallib"
+      VERBATIM)
+    # ALL so a plain `cmake --build build` compiles the shaders. A kernel that
+    # stopped compiling should break the build rather than wait for someone to
+    # ask for the target.
+    add_custom_target(hoji_shaders ALL DEPENDS "${HOJI_METALLIB}")
+
+    # Host side. Plain C++ against metal-cpp (third_party/metal_cpp.hpp), not
+    # Objective-C++, so no -fobjc-arc and no .mm. Built whenever the toolchain is
+    # present, regardless of which backend is selected.
+    add_library(hoji_metal STATIC ${HOJI_METAL_HOST})
+    add_dependencies(hoji_metal hoji_shaders)
+    target_link_libraries(hoji_metal PRIVATE hoji_third_party)
+    target_include_directories(hoji_metal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_features(hoji_metal PUBLIC cxx_std_23)
+    # The loader opens this path at runtime, so it has to be absolute.
+    target_compile_definitions(hoji_metal PRIVATE
+      HOJI_METALLIB_PATH="${HOJI_METALLIB}")
+    target_compile_options(hoji_metal PRIVATE -Wall -Wextra)
+    target_link_libraries(hoji_metal PUBLIC
+      "-framework Metal" "-framework Foundation")
+
+    # PUBLIC and on hoji_core: backend_c.cc lives there and calls into it.
+    # _BACKEND_METAL tells backend_c.cc the Metal entry point is linkable.
+    target_link_libraries(hoji_core PUBLIC hoji_metal)
+    target_compile_definitions(hoji_core PUBLIC _BACKEND_METAL)
+  endif()
+elseif(NOT _BACKEND_CPU)
+  message(FATAL_ERROR
+          "the Metal backend was selected but the metal compiler was not found."
+          " Install it with: xcodebuild -downloadComponent MetalToolchain"
+          " -- or configure with -D_BACKEND_CPU=ON")
+else()
+  message(STATUS "metal compiler not found; CPU backend only,"
+                 " and hoji_matmul_f32_metal will be absent.")
+endif()
+
+# Benchmarks live in bench/ and are driven by pytest, which compiles a backend
+# per (T_M, T_N, C_N) itself and caches it under TMPDIR -- see bench/conftest.py.
+# Nothing here builds them, so any tile can be swept without touching CMake:
 #
-# Each library compiles cpu.cc itself rather than linking hoji_core, so the -D
-# actually reaches the kernel body.
-set(HOJI_BENCH_TILES 1x1 1x4 2x2 4x4 4x8 8x4)
-
-set(HOJI_BACKEND_C "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/backend_c.cc")
-set(HOJI_CPU_KERNELS "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cpu.cc")
-
-# Highest optimization available, so a slow number means a slow kernel rather
-# than a flag we forgot. Deliberately NOT -Ofast/-ffast-math: those enable FP
-# reassociation, which lets the compiler restructure reductions itself and hides
-# exactly the effects these benches exist to measure.
-set(HOJI_BENCH_FLAGS
-  -Wall -Wextra
-  -O3 -mcpu=native -funroll-loops -ffp-contract=fast -fno-math-errno -flto
-  -g -fno-omit-frame-pointer)
-
-set(HOJI_BENCH_TARGETS)
-foreach(tile IN LISTS HOJI_BENCH_TILES)
-  string(REPLACE "x" ";" dims "${tile}")
-  list(GET dims 0 tm)
-  list(GET dims 1 tn)
-
-  set(lib "hoji_backend_t${tm}x${tn}")
-  add_library(${lib} SHARED ${HOJI_BACKEND_C} ${HOJI_CPU_KERNELS})
-  target_include_directories(${lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_compile_definitions(${lib} PRIVATE
-    _CPU_MATMUL_TILE_M=${tm} _CPU_MATMUL_TILE_N=${tn})
-  target_compile_features(${lib} PRIVATE cxx_std_23)
-  target_compile_options(${lib} PRIVATE ${HOJI_BENCH_FLAGS})
-  target_link_options(${lib} PRIVATE -flto)
-  list(APPEND HOJI_BENCH_TARGETS ${lib})
-endforeach()
-
-# Sweep every tile from Python and write a plot.
-add_custom_target(bench
-  COMMAND "${HOJI_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/bench/bench.py"
-          --build-dir "${CMAKE_CURRENT_BINARY_DIR}"
-  VERBATIM
-  USES_TERMINAL)
-add_dependencies(bench ${HOJI_BENCH_TARGETS})
+#   ./venv/bin/pytest bench -q
+#   ./venv/bin/pytest bench -q -m perf --perf-report --tiles 4x4,4x8
 
 # ---------------------------------------------------------------------------
 # Reference tensors
@@ -142,7 +204,6 @@ set(HOJI_REF_MODEL "Qwen/Qwen2-0.5B-Instruct"
     CACHE STRING "HF model id to dump reference tensors from")
 set(HOJI_REF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ref"
     CACHE PATH "Directory the reference tensors are written to")
-
 
 set(HOJI_DUMP_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/dump_tensors.py")
 
