@@ -50,12 +50,16 @@ set(HOJI_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cc")
 # metallib path, and it must not be built at all when the Metal toolchain is
 # missing. The Metal section below turns it into hoji_metal.
 set(HOJI_METAL_HOST "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal.cc")
+# Also held out: it carries its own main(), and the src/*.cc glob would otherwise
+# pull a second main() into hoji_core.
+set(HOJI_BENCH_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/bench/main.cc")
 
 # Both backends are always compiled: backend::cpu and backend::metal coexist, so
 # both type-check every build and one loaded library can run either. _BACKEND_CPU
 # only picks which one backend_c.cc's unsuffixed hoji_matmul_f32 routes to.
 set(HOJI_CORE_SOURCES ${HOJI_SOURCES})
-list(REMOVE_ITEM HOJI_CORE_SOURCES "${HOJI_MAIN}" "${HOJI_METAL_HOST}")
+list(REMOVE_ITEM HOJI_CORE_SOURCES
+     "${HOJI_MAIN}" "${HOJI_METAL_HOST}" "${HOJI_BENCH_MAIN}")
 
 add_library(hoji_core STATIC ${HOJI_CORE_SOURCES})
 
@@ -86,6 +90,29 @@ endif()
 add_executable(hoji ${HOJI_MAIN})
 target_link_libraries(hoji PRIVATE hoji_core)
 target_compile_options(hoji PRIVATE -Wall -Wextra)
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+#
+#   cmake --build build --target hoji_bench && ./build/hoji_bench
+#
+# A separate target so profiling flags stay off the engine: -g for symbols and
+# -fno-omit-frame-pointer so a sampling profiler can walk the stack, neither of
+# which a plain Release build gives you. -O3 is forced so the numbers mean
+# something even when the tree is configured as Debug.
+#
+# Include paths come entirely through hoji_core's usage requirements:
+#   src/         from hoji_core's PUBLIC include directory
+#   third_party/ from hoji_third_party, which hoji_metal links PUBLIC and
+#                hoji_core re-exports by linking hoji_metal PUBLIC
+# so backend/metal.h (and the <metal_cpp.hpp> it includes) resolve here without
+# naming either path again.
+# ---------------------------------------------------------------------------
+add_executable(hoji_bench ${HOJI_BENCH_MAIN})
+target_link_libraries(hoji_bench PRIVATE hoji_core)
+target_compile_features(hoji_bench PRIVATE cxx_std_23)
+target_compile_options(hoji_bench PRIVATE
+  -Wall -Wextra -O3 -g -fno-omit-frame-pointer)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/venv/bin/python")
   set(HOJI_PYTHON "${CMAKE_CURRENT_SOURCE_DIR}/venv/bin/python"
@@ -160,11 +187,26 @@ if(HOJI_METAL_CC)
     # present, regardless of which backend is selected.
     add_library(hoji_metal STATIC ${HOJI_METAL_HOST})
     add_dependencies(hoji_metal hoji_shaders)
-    target_link_libraries(hoji_metal PRIVATE hoji_third_party)
+    # PUBLIC, unlike json.hpp on hoji_core: backend/metal.h includes
+    # <metal_cpp.hpp>, so every consumer of that header needs third_party on its
+    # include path too. (Pimpl-ing metal.h would let this go back to PRIVATE.)
+    target_link_libraries(hoji_metal PUBLIC hoji_third_party)
     target_include_directories(hoji_metal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_features(hoji_metal PUBLIC cxx_std_23)
-    # The loader opens this path at runtime, so it has to be absolute.
+    # metal-cpp emits its selector and class tables into whichever TU defines
+    # these, and exactly one must. Defined here rather than in metal.cc because
+    # they have to precede *every* inclusion of metal_cpp.hpp: as a #define at the
+    # top of the file they are at the mercy of clang-format's SortIncludes, which
+    # migrates `#include <metal_cpp.hpp>` above them and silently turns the tables
+    # into declarations -- thousands of undefined MTL::Private::Selector symbols at
+    # link time. On the command line, ordering cannot be reshuffled.
+    #
+    # PRIVATE, and hoji_metal contains only metal.cc, so exactly one TU gets them.
+    # A second TU defining them is the mirror-image failure: duplicate symbols.
     target_compile_definitions(hoji_metal PRIVATE
+      NS_PRIVATE_IMPLEMENTATION
+      MTL_PRIVATE_IMPLEMENTATION
+      # The loader opens this path at runtime, so it has to be absolute.
       HOJI_METALLIB_PATH="${HOJI_METALLIB}")
     target_compile_options(hoji_metal PRIVATE -Wall -Wextra)
     target_link_libraries(hoji_metal PUBLIC

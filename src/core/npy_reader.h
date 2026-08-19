@@ -1,5 +1,6 @@
 #pragma once
 
+#include "backend/tensor_desc.h"
 #include "core/static_view.h"
 #include "dtype.h"
 #include "fixed_vector.h"
@@ -13,22 +14,19 @@
 
 namespace core
 {
-// Rank never exceeds 4 for transformer tensors (batch, heads, seq, dim);
-// 8 leaves headroom while keeping Shape small enough not to care about.
-constexpr size_t MAX_RANK = 8;
-using Shape               = FixedVector<size_t, MAX_RANK>;
+using Shape = FixedVector<size_t, backend::TensorDesc::MAX_RANK>;
 
 struct Npy
 {
     Shape                  shape{};
-    std::span<const float> data{};
+    std::span<float const> data{};
 
     std::byte *base  = nullptr;
     size_t     bytes = 0;
 
     Npy()                       = default;
-    Npy(const Npy &)            = delete;
-    Npy &operator=(const Npy &) = delete;
+    Npy(Npy const &)            = delete;
+    Npy &operator=(Npy const &) = delete;
 
     Npy(Npy &&other) noexcept;
     Npy &operator=(Npy &&other) noexcept;
@@ -37,9 +35,9 @@ struct Npy
     void unmap() noexcept;
 };
 
-template <size_t R> StaticView<const float32_t, R> view(const Npy &n)
+template <size_t R> StaticView<float32_t const, R> view(Npy const &n)
 {
-    StaticView<const float32_t, R> view{.data = n.data.data()};
+    StaticView<float32_t const, R> view{.data = n.data.data()};
     for (size_t i = 0; i < R; ++i)
     {
         view.dims[i] = n.shape[i];
@@ -51,5 +49,5 @@ template <size_t R> StaticView<const float32_t, R> view(const Npy &n)
 // mmaps npy_path and returns its shape plus a float32 view of the data. The
 // data is not copied; it is the mapped file.
 std::expected<Npy, std::string>
-npy_read_shape(const std::filesystem::path &npy_path);
+npy_read_shape(std::filesystem::path const &npy_path);
 } // namespace core

@@ -14,15 +14,26 @@ kernel void matmul(device const float *A [[buffer(0)]],
                    constant TensorDesc &out_desc [[buffer(4)]],
 
                    uint2 tgid [[threadgroup_position_in_grid]],
-                   uint2 tptg [[threads_per_threadgroup]],
+                   // dispatch_threads_per_threadgroup, NOT threads_per_threadgroup:
+                   // dispatchThreads shrinks the edge threadgroups, and
+                   // threads_per_threadgroup reports each group's *actual* size, so
+                   // using it as the stride makes the last group restart partway
+                   // through the grid (tgid.x=1 with a 13-wide tail gave gid.x=13..25
+                   // instead of 32..44, leaving the tail columns uncomputed). This
+                   // attribute reports the size that was *requested*, which is the
+                   // stride between threadgroup origins.
+                   uint2 dtptg [[dispatch_threads_per_threadgroup]],
                    uint2 lid [[thread_position_in_threadgroup]])
 {
-    uint const K = a_desc.shape[a_desc.rank - 1];
-    uint const M = out_desc.shape[out_desc.rank - 2];
-    uint const N = out_desc.shape[out_desc.rank - 1];
+    // TensorDesc is back-aligned: the innermost dimension is always at
+    // TensorDesc::MAX_RANK - 1 and the next out at MAX_RANK - 2, whatever the rank, so
+    // these need no `rank` lookup and work unchanged for a batched descriptor.
+    uint const K = a_desc.shape[TensorDesc::MAX_RANK - 1];
+    uint const M = out_desc.shape[TensorDesc::MAX_RANK - 2];
+    uint const N = out_desc.shape[TensorDesc::MAX_RANK - 1];
 
     // thread position in grid, then the corner of its register tile
-    uint2 const gid = tgid * tptg + lid;
+    uint2 const gid = tgid * dtptg + lid;
 
     uint const row = gid.y * T_M;
     uint const col = gid.x * T_N;

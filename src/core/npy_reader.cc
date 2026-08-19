@@ -53,7 +53,7 @@ inline std::expected<Shape, std::string> decode_shape(std::string_view header)
         if (!shape.push_back(dim))
         {
             return std::unexpected("npy rank exceeds " +
-                                   std::to_string(MAX_RANK));
+                                   std::to_string(backend::TensorDesc::MAX_RANK));
         }
     }
 
